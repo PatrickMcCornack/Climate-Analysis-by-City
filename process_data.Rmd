@@ -1,0 +1,140 @@
+---
+title: "process_data"
+output: html_document
+date: "2023-04-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The following script will take the list of cities of interest and for each city it will find the raw data file associated with that city and process it for preparation for the climate analysis. The processed data is written to a folder and is intended to be used for the mapping application. 
+
+```{r}
+library(tidyverse)
+library(lubridate)
+
+# Information
+
+# City Selection
+
+cities = c("Seattle", "StLouis", "ColumbiaSC", "Phoenix")
+city_info <- read.csv('./raw_data/city_info.csv')
+
+for(city in cities){
+  city_ID <- city_info %>% 
+    filter(Name == city) %>%
+    select(ID)
+  city_file <- paste('./raw_data/', city_ID[1,], '.csv', sep = "")
+  
+  
+  # Process the data
+  
+  df <- read.csv(city_file)
+  df <- df %>%
+    select(-X, -prcp) %>%
+    na.omit() %>% 
+    mutate(tavg = (tmax + tmin)/2) %>%
+    mutate(Date = ymd(Date)) %>%
+    mutate(year = year(Date)) %>%
+    mutate(month = month(Date)) %>%
+    mutate(day = day(Date)) %>%
+    mutate(DD = tavg - 65)
+  
+  
+  
+  
+  # Functions to to create the features
+  calc_CDD <- function(deg.day){
+    if (deg.day > 0)
+    {
+      return(deg.day)
+    }
+    else {
+      return(0)
+    }
+  }
+  
+  calc_HDD <- function(deg.day){
+    if (deg.day < 0)
+    {
+      return(abs(deg.day))
+    }
+    else {
+      return(0)
+    }
+  }
+  
+  # Create the features by applying the functions
+  df$CDD <- sapply(df$DD, calc_CDD)
+  df$HDD <- sapply(df$DD, calc_HDD)
+  
+  
+  
+  # Find the average monthly highs/lows for each month
+  avg_monthly_temps <- df %>% 
+    group_by(month) %>% 
+    summarise(avg_high = mean(tmax),
+              avg_low = mean(tmin))
+  
+  df <- df %>% inner_join(avg_monthly_temps, by = 'month')
+  
+  # Functions to find extreme temperature days using averages
+  is_xheat_avgs <- function(tmax, avg_high){
+    if(tmax > (avg_high + 10))
+    {
+      return(1)
+    }
+    else
+    {
+      return(0)
+    }
+  }
+  is_xcold_avgs <- function(tmin, avg_low){
+    if(tmin < (avg_low - 10))
+    {
+      return(1)
+    }
+    else
+    {
+      return(0)
+    }
+  }
+  
+  # Define 'extreme temperature' thresholds using percentiles
+  high_thresh <- quantile(df$tmax, .95)
+  low_thresh <- quantile(df$tmin, .05)
+  
+  # Functions to find extreme temperature days using percentiles
+  is_xheat_perc <- function(tmax, perc_high){
+    if(tmax > perc_high)
+    {
+      return(1)
+    }
+    else
+    {
+      return(0)
+    }
+  }
+  is_xcold_perc <- function(tmin, perc_low){
+    if(tmin < perc_low)
+    {
+      return(1)
+    }
+    else
+    {
+      return(0)
+    }
+  }
+  
+  df$xheat_avgs <- mapply(is_xheat_avgs, df$tmax, df$avg_high)
+  df$xcold_avgs <- mapply(is_xcold_avgs, df$tmin, df$avg_low)
+  
+  df$xheat_perc <- mapply(is_xheat_perc, df$tmax, high_thresh)
+  df$xcold_perc <- mapply(is_xcold_perc, df$tmin, low_thresh)
+  
+  write_file <- paste("./processed_data/", city, ".csv", sep = "")
+  write.csv(df, write_file)
+}
+```
+
